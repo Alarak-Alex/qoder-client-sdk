@@ -52,9 +52,18 @@ export const ENVIRONMENT = { cli: 3, app: 4 }
 // readIdentity runs the helper: { machineToken, machineType, machineCode,
 // vmInfo }. The token is per machine and environment, not per account; uid is
 // still handed over because the helper accepts it.
+//
+// A server has no helper to run — the binaries ship only with the desktop app
+// and the CLI. QODER_MACHINE_TOKEN and QODER_MACHINE_TYPE carry one machine's
+// identity read on a machine that has them, and stand in for the helper here.
 export async function readIdentity(uid, { env = ENVIRONMENT.app, ...opts } = {}) {
+  const given = {
+    machineToken: String(process.env.QODER_MACHINE_TOKEN ?? "").trim(),
+    machineType: String(process.env.QODER_MACHINE_TYPE ?? "").trim(),
+  }
+  if (given.machineToken && given.machineType) return { ...given, machineCode: "", vmInfo: null, environment: env, given: true }
   const file = await identityRuntime(opts)
-  if (!file) throw new Error("Qoder's identity helper wasn't found; install Qoder desktop, sign in to the Qoder CLI once, or set QODER_RUNTIME_INFO")
+  if (!file) throw new Error("Qoder's identity helper wasn't found; install Qoder desktop, sign in to the Qoder CLI once, or set QODER_RUNTIME_INFO or QODER_MACHINE_TOKEN/QODER_MACHINE_TYPE")
   const args = process.platform === "linux" ? [String(env)] : [String(env), "--account-stdin"]
   const out = await new Promise((res, rej) => {
     const child = execFile(file, args, { timeout: 20_000, maxBuffer: 1 << 20 }, (err, stdout) => (err ? rej(err) : res(stdout)))

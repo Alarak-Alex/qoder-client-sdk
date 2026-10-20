@@ -1,0 +1,25 @@
+services:
+  qoder-pool:
+    build: .
+    image: qoder-pool:latest
+    container_name: qoder-pool
+    restart: unless-stopped
+    # the store is the host user's file, so the process runs as that user
+    user: "${POOL_UID:-1000}:${POOL_GID:-1000}"
+    ports:
+      - "8787:8787"
+    environment:
+      # required: the key callers use, and the key the page asks for
+      QODER_CLIENT_API_KEY: ${QODER_CLIENT_API_KEY:?set QODER_CLIENT_API_KEY}
+      QODER_CLIENT_ADMIN_KEY: ${QODER_CLIENT_ADMIN_KEY:-}
+      # the machine identity, read on a machine that runs Qoder
+      QODER_MACHINE_TOKEN: ${QODER_MACHINE_TOKEN:-}
+      QODER_MACHINE_TYPE: ${QODER_MACHINE_TYPE:-}
+      QODER_MACHINE_OS: ${QODER_MACHINE_OS:-}
+    volumes:
+      - ./data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

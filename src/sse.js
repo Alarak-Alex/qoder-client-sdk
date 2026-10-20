@@ -67,6 +67,49 @@ export function describeFailure(status, text) {
   return { status, code, kind, message: message.slice(0, 2000) }
 }
 
+// peek reads a stream's first data frame and hands back a stream that replays
+// what it read. Qoder answers 200 and puts the failure in the envelope's own
+// statusCodeValue, so a spent account's refusal is only visible by looking.
+export async function peek(body) {
+  const it = body[Symbol.asyncIterator]()
+  const chunks = []
+  const dec = new TextDecoder()
+  let text = ""
+  const replay = async function* () {
+    for (const c of chunks) yield c
+    for (;;) {
+      const { value, done } = await it.next()
+      if (done) return
+      yield value
+    }
+  }
+  for (;;) {
+    const { value, done } = await it.next()
+    if (done) return { frame: null, body: replay() }
+    chunks.push(value)
+    text += dec.decode(value, { stream: true })
+    // only whole lines: a frame split across chunks is read on the next turn
+    const at = text.lastIndexOf("\n")
+    if (at < 0) continue
+    const line = text.slice(0, at).split("\n").find((l) => l.startsWith("data:"))
+    if (!line) continue
+    const payload = line.slice(5).trim()
+    try {
+      return { frame: JSON.parse(payload), body: replay() }
+    } catch {
+      return { frame: null, body: replay() }
+    }
+  }
+}
+
+// refusalOf is the failure a peeked frame is, if it is one: Qoder's envelope
+// carries its own status, and its body the error's words.
+export function refusalOf(frame) {
+  if (!frame || frame.statusCodeValue == null || frame.statusCodeValue === 200) return null
+  const inner = typeof frame.body === "string" ? frame.body : JSON.stringify(frame.body ?? frame)
+  return describeFailure(Number(frame.statusCodeValue), inner)
+}
+
 // streamChat converts Qoder's SSE into OpenAI `chat.completion.chunk` events.
 // It yields plain objects; the caller serialises them.
 export async function* streamChat(body, { id, model, includeReasoning = true }) {

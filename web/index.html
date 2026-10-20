@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>qoder-client pool</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfbfa; --fg: #1c1c1a; --muted: #6b6b66; --line: #e3e3df;
+    --card: #fff; --accent: #2f6f4f; --warn: #a8691a; --bad: #a33a2c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #16161a; --fg: #e8e8e4; --muted: #9a9a93; --line: #2c2c32; --card: #1d1d22; --accent: #6fbd95; --warn: #d9a24a; --bad: #e0736a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px; font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+  main { max-width: 1040px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0 0 4px; font-weight: 600; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 500; padding: 0 8px 8px; white-space: nowrap; }
+  td { padding: 10px 8px; border-top: 1px solid var(--line); vertical-align: middle; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody tr:hover { background: color-mix(in srgb, var(--fg) 3%, transparent); }
+  .who { font-weight: 500; }
+  .uid { color: var(--muted); font-size: 12px; font-family: ui-monospace, monospace; }
+  .bar { height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--fg) 10%, transparent); overflow: hidden; min-width: 90px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); }
+  .bar.warn > i { background: var(--warn); }
+  .bar.bad > i { background: var(--bad); }
+  .pill { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .pill.on { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); color: var(--accent); }
+  .pill.warn { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); color: var(--warn); }
+  .pill.bad { border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); color: var(--bad); }
+  button, select, input { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 5px 10px; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--bad); }
+  input { min-width: 260px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .row + .row { margin-top: 10px; }
+  label { color: var(--muted); font-size: 12px; }
+  .log { font-family: ui-monospace, monospace; font-size: 12px; max-height: 220px; overflow: auto; }
+  .log div { display: flex; gap: 12px; padding: 3px 0; border-top: 1px solid var(--line); }
+  .log time { color: var(--muted); flex: 0 0 auto; }
+  .log .why { color: var(--warn); flex: 0 0 auto; }
+  .empty { color: var(--muted); padding: 12px 0; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .err { color: var(--bad); }
+  .gate { display: flex; gap: 10px; align-items: center; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
+  .gate[hidden] { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>qoder-client pool</h1>
+  <p class="sub">多账号负载：按剩余额度排序、失败转移、会话粘在应答它的账号上。</p>
+
+  <form id="gate" hidden class="gate">
+    <label for="key">管理密钥</label>
+    <input id="key" type="password" autocomplete="current-password" placeholder="--admin-key 或 --api-key">
+    <button class="primary" type="submit">进入</button>
+  </form>
+
+  <section>
+    <h2>账号</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>账号</th><th>状态</th><th>用量</th><th class="num">近期 token</th><th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="accounts"><tr><td colspan="5" class="empty">载入中…</td></tr></tbody>
+    </table>
+    <div class="row" style="margin-top:14px">
+      <button class="primary" id="add">浏览器登录</button>
+      <input id="pat" type="password" placeholder="或粘贴 Personal Access Token">
+      <button id="addpat">用 PAT 添加</button>
+      <button id="logout" class="danger">清空账号</button>
+    </div>
+    <div class="note" id="loginNote"></div>
+  </section>
+
+  <section>
+    <h2>路由</h2>
+    <div class="row">
+      <label for="routing">策略</label>
+      <select id="routing">
+        <option value="smart">smart — 剩余额度多的先上，用完的垫底</option>
+        <option value="usage">usage — 用得最少的先上</option>
+        <option value="rotate">rotate — 每个请求轮换</option>
+        <option value="order">order — 按列表顺序</option>
+      </select>
+      <label for="affinity">会话粘性</label>
+      <select id="affinity">
+        <option value="session">session — 整个对话留在同一账号</option>
+        <option value="turn">turn — 只在一轮内（工具回传时）留守</option>
+        <option value="off">off — 每个请求重新选</option>
+      </select>
+      <button id="refresh">刷新额度</button>
+    </div>
+    <div class="note" id="routeNote"></div>
+  </section>
+
+  <section>
+    <h2>最近路由</h2>
+    <div class="log" id="log"><div class="empty">还没有请求。</div></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id)
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]))
+let state = { accounts: [], log: [], policy: {} }
+
+// The admin key is typed once and kept in sessionStorage: it is the same key
+// the OpenAI surface uses when only one is set.
+const adminKey = () => sessionStorage.getItem("adminKey") || ""
+let asking = false
+function askKey() {
+  if (asking) return
+  asking = true
+  $("gate").hidden = false
+  $("key").focus()
+}
+$("gate").addEventListener("submit", (e) => {
+  e.preventDefault()
+  const key = $("key").value.trim()
+  if (!key) return
+  sessionStorage.setItem("adminKey", key)
+  $("gate").hidden = true
+  asking = false
+  load()
+})
+async function api(path, opts = {}) {
+  const res = await fetch("/admin/api" + path, {
+    ...opts,
+    headers: { "content-type": "application/json", ...(adminKey() ? { "x-admin-key": adminKey() } : {}), ...(opts.headers || {}) },
+  })
+  if (res.status === 401) {
+    sessionStorage.removeItem("adminKey")
+    askKey()
+    throw Object.assign(new Error("需要管理密钥"), { gated: true })
+  }
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body?.error?.message || `HTTP ${res.status}`)
+  return body
+}
+
+const when = (ms) => {
+  const d = new Date(ms)
+  return d.toLocaleTimeString("zh-CN", { hour12: false })
+}
+const untilIn = (ms) => {
+  const left = Math.max(0, ms - Date.now())
+  const m = Math.round(left / 60000)
+  return m >= 1 ? `${m} 分钟` : `${Math.max(1, Math.round(left / 1000))} 秒`
+}
+
+function usageCell(a) {
+  const u = a.usage
+  if (!u) return `<span class="pill">未读取</span>`
+  if (u.error) return `<span class="pill bad" title="${esc(u.error)}">读取失败</span>`
+  if (!u.windows.length) {
+    // a plan states no window: what it has left is known only from what it
+    // answers, so the row says so rather than claim a figure
+    return `<span class="pill" title="${esc(u.plan || "")}">额度未公开</span>`
+  }
+  const w = u.windows[0]
+  const share = a.share ?? 0
+  const cls = share >= 100 ? "bad" : share >= 90 ? "warn" : ""
+  const fmt = (n) => Number(n).toLocaleString("en-US")
+  return `<div class="row" style="gap:8px">
+    <div class="bar ${cls}" style="flex:1"><i style="width:${share.toFixed(0)}%"></i></div>
+    <span class="num" title="${esc(w.name)}">${share.toFixed(1)}%</span>
+  </div>
+  <div class="uid">${fmt(w.used)} / ${fmt(w.total)} ${esc(w.unit)}</div>`
+}
+
+function statusCell(a) {
+  if (!a.enabled) return `<span class="pill">已停用</span>`
+  if (a.needsLogin) return `<span class="pill bad">需重新登录</span>`
+  if (a.resting) return `<span class="pill warn" title="${esc(a.resting.why)}">休息中 ${untilIn(a.resting.until)}</span>`
+  return `<span class="pill on">可用</span>`
+}
+
+function render() {
+  const rows = state.accounts.map((a) => `
+    <tr data-id="${esc(a.id)}">
+      <td>
+        <div class="who">${esc(a.email || a.name || a.id)}</div>
+        <div class="uid">${esc(a.id)}</div>
+      </td>
+      <td>${statusCell(a)}</td>
+      <td>${usageCell(a)}</td>
+      <td class="num">${a.tokens ? a.tokens.toLocaleString() : "—"}</td>
+      <td>
+        <div class="row" style="gap:6px">
+          <button data-act="enabled" data-on="${a.enabled ? "0" : "1"}">${a.enabled ? "停用" : "启用"}</button>
+          <button data-act="usage">读额度</button>
+          ${a.resting ? `<button data-act="unrest">解除休息</button>` : ""}
+          <button data-act="remove" class="danger">删除</button>
+        </div>
+      </td>
+    </tr>`)
+  $("accounts").innerHTML = rows.length ? rows.join("") : `<tr><td colspan="5" class="empty">还没有账号。用浏览器登录，或粘贴 PAT。</td></tr>`
+
+  $("routing").value = state.policy.routing || "smart"
+  $("affinity").value = state.policy.affinity || "session"
+
+  $("log").innerHTML = state.log.length
+    ? state.log.map((l) => `<div><time>${when(l.at)}</time><span class="why">${esc(l.kind)}</span><span>${esc(l.account)}</span><span>${esc(l.message)}</span></div>`).join("")
+    : `<div class="empty">还没有请求。</div>`
+}
+
+async function load() {
+  state = await api("/state")
+  render()
+}
+
+$("accounts").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-act]")
+  if (!btn) return
+  const id = btn.closest("tr").dataset.id
+  const path = `/accounts/${encodeURIComponent(id)}`
+  btn.disabled = true
+  try {
+    if (btn.dataset.act === "enabled") state = await api(path + "/enabled", { method: "POST", body: JSON.stringify({ enabled: btn.dataset.on === "1" }) })
+    if (btn.dataset.act === "usage") state = await api(path + "/usage", { method: "POST", body: "{}" })
+    if (btn.dataset.act === "unrest") state = await api(path + "/unrest", { method: "POST", body: "{}" })
+    if (btn.dataset.act === "remove") {
+      if (!confirm(`删除账号 ${id}？`)) return
+      state = await api(path, { method: "DELETE" })
+    }
+    render()
+  } catch (err) {
+    $("loginNote").innerHTML = `<span class="err">${esc(err.message)}</span>`
+  } finally {
+    btn.disabled = false
+  }
+})
+
+$("addpat").addEventListener("click", async () => {
+  const pat = $("pat").value.trim()
+  if (!pat) return
+  $("loginNote").textContent = "交换 PAT…"
+  try {
+    $("pat").value = ""
+    state = await api("/login/pat", { method: "POST", body: JSON.stringify({ pat }) })
+    $("loginNote").textContent = "已添加。"
+    render()
+  } catch (e) {
+    $("loginNote").innerHTML = `<span class="err">${esc(e.message)}</span>`
+  }
+})
+
+// A browser sign-in runs on the server; this polls it and opens the page.
+$("add").addEventListener("click", async () => {
+  try {
+    const start = await api("/login", { method: "POST", body: "{}" })
+    $("loginNote").textContent = "等待浏览器授权…"
+    if (start.url) window.open(start.url, "_blank", "noopener")
+    for (let i = 0; i < 450; i++) {
+      await new Promise((r) => setTimeout(r, 2000))
+      const s = await api(`/login/${start.id}`)
+      if (s.url && !window.__opened) { window.open(s.url, "_blank", "noopener"); window.__opened = true }
+      if (s.status === "done") { $("loginNote").textContent = `已登录 ${s.account}`; window.__opened = false; return load() }
+      if (s.status === "error") throw new Error(s.error)
+    }
+    throw new Error("登录超时")
+  } catch (e) {
+    window.__opened = false
+    $("loginNote").innerHTML = `<span class="err">${esc(e.message)}</span>`
+  }
+})
+
+$("logout").addEventListener("click", async () => {
+  if (!confirm("清空所有账号？")) return
+  state = await api("/logout", { method: "POST", body: "{}" })
+  render()
+})
+
+for (const id of ["routing", "affinity"]) {
+  $(id).addEventListener("change", async () => {
+    state = await api("/policy", { method: "POST", body: JSON.stringify({ [id]: $(id).value }) })
+    render()
+  })
+}
+
+$("refresh").addEventListener("click", async () => {
+  $("routeNote").textContent = "读取额度…"
+  state = await api("/refresh", { method: "POST", body: "{}" }).catch((e) => { $("routeNote").innerHTML = `<span class="err">${esc(e.message)}</span>` })
+  if (state.accounts) { $("routeNote").textContent = "已刷新。"; render() }
+})
+
+load().catch((e) => {
+  if (e.gated) return
+  $("accounts").innerHTML = `<tr><td colspan="5" class="err">${esc(e.message)}</td></tr>`
+})
+setInterval(() => load().catch(() => {}), 15000)
+</script>
+</body>
+</html>

@@ -16,6 +16,9 @@
 - [它做什么](#它做什么)
 - [安装](#安装)
 - [登录](#登录)
+- [多账号](#多账号)
+- [部署到服务器](#部署到服务器)
+- [Web UI](#web-ui)
 - [对外提供接口](#对外提供接口)
 - [作为库使用](#作为库使用)
 - [命令参考](#命令参考)
@@ -85,50 +88,150 @@ qoder-client login --pat
 
 按提示粘贴 PAT。适合没有浏览器的机器（服务器、容器）。
 
-### 确认登录状态
+### 方式三：从 magpie 导入
+
+本机装了 [magpie](https://github.com/yetone/magpie) 并且已经登录了 Qoder 时，
+不必再登录一遍：
 
 ```sh
-qoder-client whoami
+qoder-client import
 ```
 
-输出：
-
-```
-account   you@example.com
-uid       01a1xxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-email     you@example.com
-machineId 8f3c...（本机首次登录时生成）
-expires   2026-10-21T05:31:27.000Z
-```
+它会读 `~/.config/magpie/plugin-auth.json` 里所有 `qoder` / `qoder#…` 条目的
+job token、refresh token、设备 token 与 machineId，按 uid 去重后并进账号库。
 
 ### 凭据存在哪
 
-默认写入 `~/.config/qoder-client/credentials.json`，权限 `0600`。
+账号库默认是 `~/.config/qoder-client/accounts.json`，权限 `0600`。一个文件里
+放多个账号和路由策略，不再有单账号的 `credentials.json`（旧的会在首次运行时
+被并进来）。
 
 想换位置：
 
 ```sh
-qoder-client login --credentials /path/to/creds.json
+qoder-client login --accounts /path/to/accounts.json
 # 或
-export QODER_CLIENT_CREDENTIALS=/path/to/creds.json
+export QODER_CLIENT_ACCOUNTS=/path/to/accounts.json
 ```
 
-### 查看可用模型
+### 查看账号和余额
 
 ```sh
-qoder-client models
+qoder-client accounts
 ```
 
 ```
-ultimate               Ultimate                   1000000  reasoning,image
-fast                   Fast                       1000000  image
-performance            Performance                1000000  image
-dfmodel                DeepSeek-Flash             1000000  reasoning,image
+01a15722-799f-7837-99de-e6ebd0bd4545  0/100 credits
+01a157c4-29bc-7cbd-a673-305638b9da0f  usage: -
 ...
-17 models
+routing smart, affinity session  (/Users/you/.config/qoder-client/accounts.json)
 ```
 
-模型列表来自你账号自己的清单，不是硬编码。不同套餐看到的模型不同。
+模型列表来自各账号自己的清单，不是硬编码；不同套餐看到的模型不同，
+`GET /v1/models` 返回的是所有开启账号的并集。
+
+---
+
+## 多账号
+
+一个进程服务账号库里的全部账号，对外仍然只有一个端点、一个 key。
+
+### 路由
+
+`routing` 决定一个请求先给谁：
+
+| 值 | 顺序 |
+|---|---|
+| `smart`（默认） | 有额度的按已用比例升序；90% 以上的垫后；用尽的最后；额度未知的排在已知之后 |
+| `usage` | 已用最少的优先 |
+| `rotate` | 每个请求轮换到下一个 |
+| `order` | 按账号库里的顺序 |
+
+### 会话粘性
+
+`affinity` 决定一段对话要不要留在应答它的账号上：
+
+| 值 | 行为 |
+|---|---|
+| `session`（默认） | 整个对话留在同一账号，保住服务端的 prompt 缓存 |
+| `turn` | 只在一轮之内留守（工具结果回传时），用户再次发言就重新选 |
+| `off` | 每个请求都重新选 |
+
+对话的标识优先取请求头 `x-conversation-id`（或 `x-session-id`）；没有时用
+system 行加上用户第一条消息的哈希，同一段对话每轮都会算成同一个。
+
+### 失败转移
+
+- 账号拒绝（额度用尽、排队、网络错误）→ 这个账号休息一会儿，请求换下一个，
+  调用方看不到这些。
+- **Qoder 会把拒绝塞进 HTTP 200 的 SSE 帧里**（`statusCodeValue: 403`、
+  `code: 110`）。SDK 会先窥探第一帧再决定换不换号，所以额度用尽的账号不会
+  把错误透给调用方。
+- 请求本身被拒（`code` 400/416/430/80411/…）不换号，原样返回给调用方。
+
+休息时长：额度 15 分钟、排队 30 秒、网络 15 秒、其他 1 分钟。UI 上可以手动
+解除。
+
+### 配置
+
+```sh
+# 命令行
+qoder-client serve --routing smart --affinity session
+
+# 或在 Web UI 里选
+```
+
+---
+
+## 部署到服务器
+
+服务器上没有 Qoder 的机器身份 helper（`runtime-info` 只有桌面端和 CLI 才
+带）。两种办法：
+
+1. 把 Qoder CLI 装上去并登录一次，helper 会落到 `~/.qoder/.bin`；
+2. 在一台装了 Qoder 的机器上读出身份，用环境变量带过去（推荐）。
+
+读身份：
+
+```sh
+node -e 'import("./src/identity.js").then(async m => {
+  const i = await m.readIdentity()
+  console.log(i.machineToken, i.machineType)
+})'
+```
+
+然后用 Docker Compose：
+
+```sh
+cp .env.example .env
+# 填 QODER_CLIENT_API_KEY、QODER_CLIENT_ADMIN_KEY、QODER_MACHINE_TOKEN、
+# QODER_MACHINE_TYPE、QODER_MACHINE_OS
+docker compose up -d --build
+curl http://127.0.0.1:8787/health
+```
+
+`QODER_MACHINE_OS` 填读身份那台机器的（如 `aarch64_darwin`）：机器 token 是
+那台机器的，信封里的 `Cosy-MachineOS` 也要跟着它，否则两者对不上。不填就按
+容器自己的平台报（`x86_64_linux`），和使用那台机器 identity 的真实客户端不一致。
+
+账号库挂到 `./data/accounts.json`。容器里的进程用 `POOL_UID`/`POOL_GID`
+（默认 1000:1000）跑，要跟文件属主一致，否则写不进去。
+
+只需要一个端口（默认 8787）。账号不按端口分，全部走同一个端点。
+
+---
+
+## Web UI
+
+浏览器打开 `http://<host>:8787/`，输入管理密钥（`--admin-key`，没设就是
+`--api-key`）。页面上可以：
+
+- 看每个账号的额度、休息状态、最近服务的 token 数
+- 浏览器登录 / 粘贴 PAT 加账号，删除、停用、手动读额度、解除休息
+- 切换 `routing` 和 `affinity`
+- 看最近的路由决策（谁被跳过、为什么）
+
+管理接口在 `/admin/api/` 下，`/admin/api/state` 返回整页的数据。
 
 ---
 
@@ -140,8 +243,9 @@ qoder-client serve --port 8787 --api-key sk-local
 
 ```
 qoder-client serving on http://127.0.0.1:8787
-  account you@example.com
-  openai base_url http://127.0.0.1:8787/v1  (bearer key required)
+  accounts  7 (7 on), routing smart, affinity session
+  openai    http://127.0.0.1:8787/v1  (bearer key required)
+  web ui    http://127.0.0.1:8787/
 ```
 
 `--api-key` 建议一定要设。不设的话，本机任何程序都能白用你的额度。
@@ -221,13 +325,34 @@ client.chat.completions.create(model="dfmodel", messages=[...], reasoning_effort
 
 模型不支持该档位时，取最接近的一档；间距相同时取更高的一档。
 
+### 会话粘性头
+
+同一段对话要留在同一个账号上（保住 prompt 缓存），带上对话 id：
+
+```sh
+curl ... -H "x-conversation-id: my-chat-42"
+```
+
+不带也能工作：SDK 用 system 行 + 用户第一条消息的哈希当 id。但如果两次请求的
+system 都为空、第一条消息又是同一句，它们会被当成同一段对话。
+
 ### 接口一览
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/v1/models` | 模型列表 |
-| POST | `/v1/chat/completions` | 对话，支持 `stream` |
+| GET | `/v1/models` | 所有开启账号的模型并集 |
+| POST | `/v1/chat/completions` | 对话，支持 `stream`；池子自己选账号 |
 | GET | `/health` | 存活检查，不需要 key |
+| GET | `/` | Web UI |
+| GET | `/admin/api/state` | 账号、路由策略、最近决策 |
+| POST | `/admin/api/policy` | 改 `routing` / `affinity` |
+| POST | `/admin/api/refresh` | 读全部账号的额度 |
+| POST | `/admin/api/login` | 开始浏览器登录，返回轮询 id |
+| POST | `/admin/api/login/pat` | 用 PAT 加账号 |
+| POST | `/admin/api/accounts/<id>/enabled` | 停用/启用 |
+| POST | `/admin/api/accounts/<id>/unrest` | 解除休息 |
+| POST | `/admin/api/accounts/<id>/usage` | 读这个账号的额度 |
+| DELETE | `/admin/api/accounts/<id>` | 删账号 |
 
 ---
 
@@ -237,57 +362,69 @@ client.chat.completions.create(model="dfmodel", messages=[...], reasoning_effort
 
 ```js
 import {
-  QoderClient, IdentityCache, deviceSignIn, refreshJob,
-  saveCredentials, requestBody, normalizeModels,
+  AccountStore, Pool, IdentityCache, QoderClient,
+  deviceSignIn, patSignIn, importMagpie, readUsage,
+  requestBody, normalizeModels,
 } from "qoder-client-sdk"
 
-// 1. 登录（只做一次，之后从文件读）
-const creds = await deviceSignIn(undefined, {
-  onUrl: (url) => console.log("请打开：", url),
+// 1. 账号库：登录、导入，或读取已有的文件
+const store = await new AccountStore().load()
+await store.add(await deviceSignIn(undefined, { onUrl: (u) => console.log(u) }))
+// 已经有 magpie 的话：await importMagpie(store)
+
+// 2. 池子：账号、路由策略、额度、休息
+const clients = new Map()
+const pool = new Pool({
+  store,
+  clientFor: (id) => {
+    if (!clients.has(id)) {
+      clients.set(id, new QoderClient({ credentials: store.creds(id), identity: new IdentityCache(), refreshJob: store.refresher(id) }))
+    }
+    return clients.get(id)
+  },
+  usageOf: (id) => readUsage(store, id),
 })
-await saveCredentials(creds)
+await pool.refreshAll()          // 后台读一遍额度，路由才有依据
 
-// 2. 建客户端
-const client = new QoderClient({
-  credentials: creds,
-  identity: new IdentityCache(),   // 机器身份，自动缓存一小时
-  refreshJob,                      // token 过期时自动刷新
-  onCredentials: saveCredentials,
+// 3. 发请求：池子自己选号、失败换号
+const { account, upstream, model } = await pool.run({
+  conversation: { id: "my-chat", body: chat },
+  build: async (id) => {
+    const list = normalizeModels(await clients.get(id).models(), "chat")
+    const m = list.find((x) => x.key === "dfmodel")
+    return { payload: requestBody(chat, m), model: m }
+  },
 })
 
-// 3. 列模型
-const listing = await client.models()
-const models = normalizeModels(listing, "chat")
-const model = models.find((m) => m.key === "dfmodel")
-
-// 4. 发请求，拿原始 SSE
-const body = requestBody({ messages: [{ role: "user", content: "你好" }] }, model)
-const res = await client.chat(body)
-
-// 5. 用内置解析器转成 OpenAI 格式
-import { readChat, streamChat } from "qoder-client-sdk"
-const answer = await readChat(res.body, { id: "x", model: model.key })
-console.log(answer.choices[0].message.content)
+// 4. 转成 OpenAI 格式
+import { readChat } from "qoder-client-sdk"
+const answer = await readChat(upstream.body, { id: "x", model: model.key })
+pool.served(account.id, answer.usage?.total_tokens)
+pool.stick("my-chat", account.id)
 ```
+
+不想管账号池、只要一个账号时，`QoderClient` 本身照旧可用（`credentials` 直接
+传一份登录结果）。
 
 ---
 
 ## 命令参考
 
 ```
-qoder-client login [--pat]     登录（浏览器授权 / PAT）
-qoder-client logout            删除本地凭据
-qoder-client whoami            显示当前账号
-qoder-client models            列出账号可用模型
+qoder-client login [--pat]     加一个账号（浏览器授权 / PAT）
+qoder-client import            从 magpie 导入已登录的 Qoder 账号
+qoder-client accounts          列出账号和各自余额
+qoder-client logout [<id>]     删一个账号，或全部
 qoder-client serve             启动 OpenAI 兼容服务
     --port <n>                 端口，默认 8787
     --host <addr>              监听地址，默认 127.0.0.1
-    --api-key <key>            要求 Bearer key
+    --api-key <key>            调用方用的 Bearer key
+    --admin-key <key>          Web UI / admin API 的 key（默认同 --api-key）
     --model <key>              默认模型
 ```
 
-所有命令都接受 `--credentials <path>`，或用环境变量
-`QODER_CLIENT_CREDENTIALS`。
+所有命令都接受 `--accounts <path>`，或用环境变量 `QODER_CLIENT_ACCOUNTS`
+（默认 `~/.config/qoder-client/accounts.json`）。
 
 ---
 
@@ -378,6 +515,11 @@ qoder-client serve --host 0.0.0.0 --port 9000 --api-key 一个足够长的随机
 ## 已知限制
 
 - **需要已登录的 Qoder 账号**，调用消耗的是该账号的 credits。
+- **额度不公开的套餐无法按额度排序**。有些账号的用量接口只回
+  `userQuota.total = 0`，既没有窗口也没有可用比例；这种账号的 `share` 记为
+  未知，排在已知额度之后，靠实际失败来休息。`isQuotaExceeded` 没有采用：
+  实测它为 `true` 的账号能正常回答，为 `false` 的反而报 110。
+- **休息状态不落盘**，进程重启后清空；账号和路由策略落盘。
 - **`COSY_VERSION` 是写死的 `1.1.69`**。客户端升级后需要同步改这个值，否则
   仅凭版本号就能看出流量是旧的。
 - **不做自动重试**，配额统计也不做。
@@ -395,9 +537,11 @@ qoder-client serve --host 0.0.0.0 --port 9000 --api-key 一个足够长的随机
 npm test
 ```
 
-10 项离线测试，不需要网络也不需要账号：
+26 项离线测试，不需要网络也不需要账号：
 
 - 编解码对照客户端产出的三组向量
+- 路由策略、休息与恢复、会话粘性、失败转移（含 SSE 内嵌的拒绝）
+- 用量信封解析
 - COSY 信封结构、`Cosy-Version`、`/algo` 不带 `Cosy-ClientIp`
 - 请求体 `business` / `parameters` / tool 消息 / reasoning 保留
 - 真实 SSE 响应的解析与 usage 映射

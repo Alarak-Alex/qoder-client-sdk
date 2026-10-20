@@ -203,11 +203,15 @@ export class QoderClient {
     const call = () => fetch(url, { headers: cosyHeaders(url, this.#creds, "", { identity }), signal: AbortSignal.timeout(15_000) })
     let res = await call()
     if (res.status === 401 || res.status === 403) {
-      await this.#refresh()
+      // a lapsed sign-in is the caller's to see as 401; another failure is not
+      await this.#refresh().catch((e) => {
+        if (e.expired) e.status = 401
+        throw e
+      })
       res = await call()
     }
     const text = await res.text()
-    if (!res.ok) throw new Error(`model list: HTTP ${res.status}: ${text.trim().slice(0, 300)}`)
+    if (!res.ok) throw Object.assign(new Error(`model list: HTTP ${res.status}: ${text.trim().slice(0, 300)}`), { status: res.status })
     return JSON.parse(text)
   }
 
@@ -232,7 +236,11 @@ export class QoderClient {
       })
     let res = await send()
     if (res.status === 401 || res.status === 403) {
-      await this.#refresh()
+      // a lapsed sign-in is the caller's to see as 401; another failure is not
+      await this.#refresh().catch((e) => {
+        if (e.expired) e.status = 401
+        throw e
+      })
       res = await send()
     }
     return res

@@ -1,3 +1,8 @@
 node_modules/
 *.log
 .DS_Store
+
+# the account store holds sign-ins; it is never committed
+data/
+accounts.json
+.env

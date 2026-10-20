@@ -23,7 +23,11 @@ export const CLIENT_TYPE = "10"
 
 const hexID = () => randomUUID().replaceAll("-", "")
 
+// machineOS is what the envelope claims the machine runs. A machine identity
+// read elsewhere (QODER_MACHINE_TOKEN) comes from the machine that read it, so
+// QODER_MACHINE_OS keeps the two saying the same thing.
 const machineOS = (arch = process.arch, platform = process.platform) => {
+  if (process.env.QODER_MACHINE_OS) return process.env.QODER_MACHINE_OS
   const a = { x64: "x86_64", ia32: "x86", arm64: "aarch64" }[arch] ?? arch
   return `${a}_${platform}`
 }
