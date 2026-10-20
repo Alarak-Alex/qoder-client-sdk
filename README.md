@@ -319,9 +319,9 @@ token**：
 | `3` | CLI | 否 |
 | `0` | 另一环境 | 否 |
 
-实测：同一台机器上，`env=4` 得到
-`P1gAyBOr…` / `5d82dd109113cee843`，与 `~/.qoder/umid-cache.json` 以及抓到的
-桌面端请求**逐字符相同**；`env=3` 得到的是另一组。
+实测：同一台机器上，`env=4` 与 `env=3` 返回的机器 token 完全不同；`env=4`
+那一组与 `~/.qoder/umid-cache.json` 以及抓到的桌面端请求**逐字符相同**。差值
+仅在于 environment 参数，与账号无关（传入不同 uid 得到的 token 相同）。
 
 所以本 SDK 固定用 environment 4。声明自己是桌面端（`Cosy-ClientType: 10`）
 却发送 CLI 的机器 token，是一个任何真实客户端都不会产生的组合。
@@ -398,7 +398,6 @@ npm test
 10 项离线测试，不需要网络也不需要账号：
 
 - 编解码对照客户端产出的三组向量
-- 1.4 MB 真实抓包请求体解码后再编码，字节完全一致
 - COSY 信封结构、`Cosy-Version`、`/algo` 不带 `Cosy-ClientIp`
 - 请求体 `business` / `parameters` / tool 消息 / reasoning 保留
 - 真实 SSE 响应的解析与 usage 映射
@@ -418,5 +417,11 @@ bin/qoder-client.js  命令行入口
 
 ### 自建 fixture
 
-`test/sdk.test.js` 里有一条用例会读取 `/tmp/qoder-re/capture/requests.jsonl.body`
-（真实的编码后请求体）。文件不存在时该用例自动跳过，其余测试照常运行。
+想用真实请求体验证编解码，把抓到的编码后 body 存成文件，再指定给它：
+
+```sh
+QODER_CAPTURE_BODY=/path/to/body.txt npm test
+```
+
+该用例会检查解码后能解析出 `business`，并且重新编码与原始字节完全一致。
+不设这个变量时该用例自动跳过，其余 9 项照常运行。

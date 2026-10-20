@@ -12,7 +12,7 @@ import { decodeBody, encodeBody, cosyHeaders, COSY_VERSION } from "../src/cosy.j
 import { contextWindow, pickEffort, requestBody, normalizeModels } from "../src/client.js"
 import { describeFailure, readChat, streamChat } from "../src/sse.js"
 
-const CAPTURE = "/tmp/qoder-re/capture/requests.jsonl"
+const CAPTURE = process.env.QODER_CAPTURE_BODY || ""
 const cred = { uid: "01a1", access: "jt-test", email: "a@b.c", name: "T", machineId: "mid-1" }
 
 test("codec matches the client's own vectors", () => {
@@ -137,8 +137,10 @@ test("SSE becomes OpenAI chunks", async () => {
   assert.equal(whole.usage.total_tokens, 7)
 })
 
-test("a captured client body decodes and re-encodes", { skip: !existsSync(`${CAPTURE}.body`) }, () => {
-  const wire = readFileSync(`${CAPTURE}.body`, "latin1")
+// Optional fixture: point QODER_CAPTURE_BODY at a body captured from the client
+// to check the codec against a real one. Skipped when unset.
+test("a captured client body decodes and re-encodes", { skip: !CAPTURE || !existsSync(CAPTURE) }, () => {
+  const wire = readFileSync(CAPTURE, "latin1")
   const plain = decodeBody(wire)
   assert.equal(encodeBody(plain), wire)
   assert.ok(JSON.parse(plain).business)
