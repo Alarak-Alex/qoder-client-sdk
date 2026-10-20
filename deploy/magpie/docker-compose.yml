@@ -1,0 +1,35 @@
+services:
+  magpie:
+    # the official build: a terminal-only magpie, gateway + web page, no desktop
+    image: ghcr.io/yetone/magpie:latest
+    container_name: magpie
+    restart: unless-stopped
+    ports:
+      # 3425 is the gateway agents call, 3430 the page. The host side is
+      # MAGPIE_PORT / MAGPIE_WEB_PORT: two of these on one machine, or a
+      # desktop magpie already on 3425, need their own. 127.0.0.1 keeps both
+      # on the host: reach them over SSH, or change it to the LAN address.
+      - "127.0.0.1:${MAGPIE_PORT:-3425}:3425"
+      - "127.0.0.1:${MAGPIE_WEB_PORT:-3430}:3430"
+    environment:
+      # set so the page's link survives a restart (16+ of a-z 0-9 - . _ ~)
+      MAGPIE_WEB_KEY: ${MAGPIE_WEB_KEY:?set MAGPIE_WEB_KEY}
+      # the address other machines use; the container only sees 172.17.x
+      MAGPIE_PUBLIC_URL: ${MAGPIE_PUBLIC_URL:-http://127.0.0.1:3425}
+      # optional: only these addresses reach the gateway and the page
+      MAGPIE_ALLOW_IPS: ${MAGPIE_ALLOW_IPS:-}
+    volumes:
+      # everything magpie writes: providers, keys, sign-ins, plugins, usage
+      - ./config:/config
+    command: [web, --addr, 0.0.0.0:3430, --no-open]
+    healthcheck:
+      test: ["CMD", "/magpie", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -6,3 +6,7 @@ node_modules/
 data/
 accounts.json
 .env
+
+# the magpie deployment's data dir holds sign-ins
+deploy/magpie/config/
+deploy/magpie/.env

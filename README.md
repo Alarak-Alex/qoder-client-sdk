@@ -18,6 +18,7 @@
 - [登录](#登录)
 - [多账号](#多账号)
 - [部署到服务器](#部署到服务器)
+- [用 magpie 部署（推荐）](#用-magpie-部署推荐)
 - [Web UI](#web-ui)
 - [对外提供接口](#对外提供接口)
 - [作为库使用](#作为库使用)
@@ -218,6 +219,33 @@ curl http://127.0.0.1:8787/health
 （默认 1000:1000）跑，要跟文件属主一致，否则写不进去。
 
 只需要一个端口（默认 8787）。账号不按端口分，全部走同一个端点。
+
+---
+
+## 用 magpie 部署（推荐）
+
+多账号部署时用 magpie 的官方镜像，别用本项目的池：
+
+```sh
+./deploy/magpie/deploy.sh --host 192.168.0.60 --lan
+```
+
+它起 `ghcr.io/yetone/magpie:latest`（纯终端版，网关 + Web 页面），并把本机
+magpie 里已登录的 Qoder 账号同步进去。调用方用 magpie 的网关密钥：
+
+```bash
+curl http://192.168.0.60:3425/v1/chat/completions \
+  -H "Authorization: Bearer sk-magpie-key-…" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"qoder/dfmodel","messages":[{"role":"user","content":"你好"}]}'
+```
+
+**为什么**：Qoder 的 refresh token 一次性，同一个账号被两个程序各刷一次就会
+互相踢掉。magpie 是唯一持有凭据的一方，就不会有这个问题；token 续期、配额、
+账号排序也都不必自己写。
+
+细节、限额、排查：[deploy/magpie/README.md](deploy/magpie/README.md)。
+同步脚本可以单独用：`node tools/sync-magpie.mjs --to <dir> --dry-run`。
 
 ---
 
